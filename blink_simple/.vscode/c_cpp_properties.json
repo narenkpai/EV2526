@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "name": "Pico",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/Users/narenpai/.pico-sdk/sdk/2.1.0/src/common/pico_base_headers/include",
+                "/Users/narenpai/.pico-sdk/sdk/2.1.0/src/boards/include",
+                "/Users/narenpai/.pico-sdk/sdk/2.1.0/src/rp2_common/pico_stdlib/include"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/arm-none-eabi-gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-arm",
+            "compileCommands": [
+                "${workspaceFolder}/build/compile_commands.json"
+            ]
+        }
+    ],
+    "version": 4
+}
