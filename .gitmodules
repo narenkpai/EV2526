@@ -1,0 +1,3 @@
+[submodule "SimpleFOCStudio"]
+	path = SimpleFOCStudio
+	url = https://github.com/JorgeMaker/SimpleFOCStudio.git
