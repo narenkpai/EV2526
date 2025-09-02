@@ -1,64 +1,88 @@
+#include <Arduino.h>
 #include <SimpleFOC.h>
+#include <SimpleFOCDrivers.h>
+#include "encoders/mt6835/MagneticSensorMT6835.h"
 
-// AS5600 sensor on I2C0 (pins 8=SDA, 9=SCL)
-MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
-BLDCMotor motor = BLDCMotor(7); // 7 pole pairs
-BLDCDriver3PWM driver = BLDCDriver3PWM(2, 3, 4, 5); // A,B,C,Enable
+// MT6835 on SPI0 pins
+#define PIN_SCK   2   // GP2 SCK
+#define PIN_MOSI  3   // GP3 MOSI
+#define PIN_MISO  4   // GP4 MISO
+#define SENSOR_CSLEFT 11 // GP11 CS
+#define SENSOR_CSRIGHT 5 // GP11 CS
 
-float target_velocity = 20.0; // rad/s
+// MT6835 needs SPI mode 3
+SPISettings mt6835SPI(1000000, MT6835_BITORDER, SPI_MODE3);
+
+MagneticSensorMT6835 sensorLEFT(SENSOR_CSLEFT, mt6835SPI);
+MagneticSensorMT6835 sensorRIGHT(SENSOR_CSRIGHT, mt6835SPI);
+
+// Motor and driver
+BLDCMotor motorLEFT = BLDCMotor(7);   
+BLDCMotor motorRIGHT = BLDCMotor(7);                  // pole pairs
+BLDCDriver3PWM driverRIGHT = BLDCDriver3PWM(18, 19, 20, 21); // A,B,C,EN
+BLDCDriver3PWM driverLEFT = BLDCDriver3PWM(12, 10, 8, 9);
+
+// Fixed target speed [rad/s]
+static const float SET_VELOCITYRIGHT = -200.0f;
+static const float SET_VELOCITYLEFT = 200.0f;
 
 void setup() {
-  Serial.begin(115200);
-  delay(300);
+  // SPI0 map
+  SPI.setSCK(PIN_SCK);
+  SPI.setTX(PIN_MOSI);
+  SPI.setRX(PIN_MISO);
+  SPI.begin();
 
-  // I2C0 setup
-  Wire.setSDA(8);
-  Wire.setSCL(9);
-  Wire.begin();
-  Wire.setClock(400000);
-  sensor.init(&Wire);
-
-  // Link sensor
-  motor.linkSensor(&sensor);
+  // Sensor
+  sensorLEFT.init(&SPI);
+  sensorRIGHT.init(&SPI);
+  motorLEFT.linkSensor(&sensorLEFT);
+  motorRIGHT.linkSensor(&sensorRIGHT);
 
   // Driver setup
-  driver.voltage_power_supply = 12;
-  motor.voltage_limit = 6;
-  driver.init();
-  motor.linkDriver(&driver);
+ // driverLEFT.enable_active_high = true;   // EN tied high is fine
+  driverLEFT.voltage_power_supply = 12.0f;
+  driverLEFT.voltage_limit        = 6.0f; // keep modest to start
+  driverLEFT.init();
 
-  // Velocity PID
-  motor.PID_velocity.P = 1.0;
-  motor.PID_velocity.I = 1.5;
-  motor.LPF_velocity.Tf = 0.05;
+ // driverRIGHT.enable_active_high = true;   // EN tied high is fine
+  driverRIGHT.voltage_power_supply = 12.0f;
+  driverRIGHT.voltage_limit        = 6.0f; // keep modest to start
+  driverRIGHT.init();
 
-  // Control mode
-  motor.controller = MotionControlType::velocity;
-  motor.sensor_direction = Direction::CCW;
-  motor.zero_electric_angle = 0.0;
+  // Motor setup
+  motorLEFT.linkDriver(&driverLEFT);
+  motorRIGHT.linkDriver(&driverRIGHT);
 
-  // Init motor
-  motor.init();
-  motor.initFOC();
+  // Velocity control with internal angle from sensor
+  motorLEFT.controller = MotionControlType::velocity;
+  motorRIGHT.controller = MotionControlType::velocity;
 
-  Serial.println("Motor velocity test ready.");
-  Serial.println("Enter velocity in rad/s (e.g. 10 or -5):");
+  // Velocity loop tuning starters
+  motorLEFT.PID_velocity.P   = 1.5f;
+  motorLEFT.PID_velocity.I   = 8.0f;
+  motorLEFT.PID_velocity.D   = 0.0f;
+ // motorLEFT.LPF_velocity.Tf  = 0.02f;
+
+  motorLEFT.voltage_limit    = 12.0f; 
+  
+  motorRIGHT.PID_velocity.P   = 1.5f;
+  motorRIGHT.PID_velocity.I   = 8.0f;
+  motorRIGHT.PID_velocity.D   = 0.0f;
+ // motorRIGHT.LPF_velocity.Tf  = 0.02f;
+
+  motorRIGHT.voltage_limit    = 12.0f;     // safety limit for q-voltage
+
+  // Let SimpleFOC find zero_electric_angle and sensor_direction
+  motorRIGHT.init();
+  motorRIGHT.initFOC();
+  motorLEFT.init();
+  motorLEFT.initFOC();
 }
 
 void loop() {
-  motor.loopFOC();
-  motor.move(target_velocity);
-
-  if (Serial.available()) {
-    float new_vel = Serial.parseFloat();
-    if (!isnan(new_vel)) {
-      target_velocity = new_vel;
-      Serial.print("New velocity set to: ");
-      Serial.println(target_velocity, 3);
-    }
-    // Clear line endings
-    while (Serial.available() && (Serial.peek() == '\n' || Serial.peek() == '\r')) {
-      Serial.read();
-    }
-  }
+  motorRIGHT.loopFOC();
+  motorRIGHT.move(SET_VELOCITYRIGHT);
+    motorLEFT.loopFOC();
+  motorLEFT.move(SET_VELOCITYLEFT);
 }

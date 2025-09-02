@@ -1,30 +1,60 @@
-#include <SimpleFOC.h>
+#include <Arduino.h>
 
-// AS5600 I2C sensor instance for I2C1
-MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
+#include "SimpleFOC.h"
+#include "SimpleFOCDrivers.h"
+#include "encoders/mt6835/MagneticSensorMT6835.h"
+
+// Chip select pins for the two encoders
+#define SENSOR_A_nCS 5
+#define SENSOR_B_nCS 11
+
+// SPI pins (use your Pico hardware SPI0 pins)
+#define PIN_SCK    2
+#define PIN_MOSI   3
+#define PIN_MISO   4
+
+// SPI settings for MT6835 (mode 3, up to 10 MHz, start with 1 MHz)
+SPISettings myMT6835SPISettings(1000000, MT6835_BITORDER, SPI_MODE3);
+
+// Two sensor objects, same SPI bus, different CS
+MagneticSensorMT6835 sensorA = MagneticSensorMT6835(SENSOR_A_nCS, myMT6835SPISettings);
+MagneticSensorMT6835 sensorB = MagneticSensorMT6835(SENSOR_B_nCS, myMT6835SPISettings);
+
+long ts;
 
 void setup() {
-  // Set I2C1 pins before starting
-  Wire1.setSDA(6);  // SDA pin for motor 2
-  Wire1.setSCL(7);  // SCL pin for motor 2
+  // Configure SPI pins for Pico
+  SPI.setSCK(PIN_SCK);
+  SPI.setTX(PIN_MOSI);
+  SPI.setRX(PIN_MISO);
+  SPI.begin();
 
-  Serial.begin(115200);
-  delay(300);  // Give USB a moment to initialize
+  // Make CS pins safe
+  pinMode(SENSOR_A_nCS, INPUT_PULLUP);
+  pinMode(SENSOR_B_nCS, INPUT_PULLUP);
 
-  // Start I2C1
-  Wire1.begin();
-  Wire1.setClock(400000);  // Fast I2C at 400 kHz
+  // Enable SimpleFOC debugging
+  SimpleFOCDebug::enable();
 
-  // Initialize AS5600 on I2C1
-  sensor.init(&Wire1);
+  // Init both encoders
+  sensorA.init();
+  sensorB.init();
 
-  Serial.println("Motor 2 sensor ready");
-  _delay(1000);
+  ts = millis();
 }
 
 void loop() {
-  sensor.update();
-  Serial.print(sensor.getAngle());    // in radians
-  Serial.print("\t");
-  Serial.println(sensor.getVelocity()); // rad/s
+  // Update both encoders
+  sensorA.update();
+  sensorB.update();
+
+    // Print A
+    SimpleFOCDebug::print("A angle: ");
+    SimpleFOCDebug::print(sensorA.getAngle());
+    SimpleFOCDebug::print(" ");
+
+    // Print B
+    SimpleFOCDebug::print("B angle: ");
+    SimpleFOCDebug::println(sensorB.getAngle());
+
 }

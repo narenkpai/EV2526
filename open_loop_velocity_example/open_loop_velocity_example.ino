@@ -1,79 +1,65 @@
-// Open loop motor control example
-#include <SimpleFOC.h>
+#include <Arduino.h>
 
+#include "SimpleFOC.h"
+#include "SimpleFOCDrivers.h"
 
-// BLDC motor & driver instance
-// BLDCMotor motor = BLDCMotor(pole pair number);
-BLDCMotor motor = BLDCMotor(12);
-// BLDCDriver3PWM driver = BLDCDriver3PWM(pwmA, pwmB, pwmC, Enable(optional));
-BLDCDriver3PWM driver = BLDCDriver3PWM(2, 3, 4, 5);
+// Motor and driver
+// Set your motor pole pairs
+BLDCMotor motor = BLDCMotor(7);
 
-// Stepper motor & driver instance
-//StepperMotor motor = StepperMotor(50);
-//StepperDriver4PWM driver = StepperDriver4PWM(9, 5, 10, 6,  8);
+// Pins: PWM_A, PWM_B, PWM_C, EN
+// RP2040 GPIO 18, 19, 20 are PWM capable. 21 as enable.
+BLDCDriver3PWM driver = BLDCDriver3PWM(18, 19, 20, 21);
 
-
-//target variable
-float target_velocity = 0;
-
-// instantiate the commander
-Commander command = Commander(Serial);
-void doTarget(char* cmd) { command.scalar(&target_velocity, cmd); }
-void doLimit(char* cmd) { command.scalar(&motor.voltage_limit, cmd); }
+// Fixed target velocity [rad/s]
+static const float SET_VELOCITY_RAD_S = 20.0f;  // adjust as needed
 
 void setup() {
+  // No Serial, no Commander. Runs without USB.
 
-  // use monitoring with serial 
-  Serial.begin(115200);
-  // enable more verbose output for debugging
-  // comment out if not needed
-  SimpleFOCDebug::enable(&Serial);
+  // Driver config
+  driver.voltage_power_supply = 11.0f;   // your DC bus
+  driver.voltage_limit        = 6.0f;    // start conservative
+  driver.pwm_frequency        = 25000;   // 25 kHz
+//  driver.dead_zone            = 0.02f;   // tune for your half bridge
 
-  // driver config
-  // power supply voltage [V]
-  driver.voltage_power_supply = 11;
-  // limit the maximal dc voltage the driver can set
-  // as a protection measure for the low-resistance motors
-  // this value is fixed on startup
-  driver.voltage_limit = 11;
-  if(!driver.init()){
-    Serial.println("Driver init failed!");
-    return;
+  if (!driver.init()) {
+    // If you want a visual error, toggle EN quickly
+    pinMode(21, OUTPUT);
+    while (1) { digitalWrite(21, !digitalRead(21)); delay(200); }
   }
-  // link the motor and the driver
+
+  // Link motor to driver
   motor.linkDriver(&driver);
 
-  // limiting motor movements
-  // limit the voltage to be set to the motor
-  // start very low for high resistance motors
-  // current = voltage / resistance, so try to be well under 1Amp
-  motor.voltage_limit = 6;   // [V]
- 
-  // open loop control config
+  // Open loop velocity control
   motor.controller = MotionControlType::velocity_openloop;
+  motor.voltage_limit = 6.0f;            // motor protection
+  motor.velocity_limit = 1000.0f;        // not critical in open loop
 
-  // init motor hardware
-  if(!motor.init()){
-    Serial.println("Motor init failed!");
-    return;
+  // Optional small initial q voltage to help start smoothly
+  //motor.Uq = 1.5f;
+
+  if (!motor.init()) {
+    pinMode(21, OUTPUT);
+    while (1) { digitalWrite(21, !digitalRead(21)); delay(200); }
   }
 
-  // add target command T
-  command.add('T', doTarget, "target velocity");
-  command.add('L', doLimit, "voltage limit");
-
-  Serial.println("Motor ready!");
-  Serial.println("Set target velocity [rad/s]");
-  _delay(1000);
+  // If you want a quick ramp up instead of a step, do it here
+  // Simple linear ramp to SET_VELOCITY_RAD_S over ~0.5 s
+  float v = 0.0f;
+  const float dv = SET_VELOCITY_RAD_S / 50.0f;
+  for (int i = 0; i < 50; ++i) {
+    v += dv;
+    motor.move(v);
+    delay(10);
+  }
 }
 
 void loop() {
+  // Keep motor spinning at fixed velocity
+  motor.move(SET_VELOCITY_RAD_S);
 
-  // open loop velocity movement
-  // using motor.voltage_limit and motor.velocity_limit
-  // to turn the motor "backwards", just set a negative target_velocity
-  motor.move(6.28);
-
-  // user communication
-  command.run();
+  // Small delay keeps CPU cool, adjust as you like
+  delay(1);
 }
