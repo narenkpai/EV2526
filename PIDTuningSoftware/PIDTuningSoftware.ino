@@ -1,95 +1,124 @@
+#include <Arduino.h>
+#include <SPI.h>
 #include <SimpleFOC.h>
 #include <SimpleFOCDrivers.h>
-#include "encoders/as5600/MagneticSensorAS5600.h"
+#include "encoders/mt6835/MagneticSensorMT6835.h"
 
-// Motor 1 hardware (I2C0 on pins 8=SDA, 9=SCL)
-MagneticSensorAS5600 sensor1;          // AS5600 on Wire
-BLDCMotor motor1(7);
-BLDCDriver3PWM driver1(2, 3, 4, 5);
+// ---------- Your SPI0 pin map ----------
+#define PIN_SCK        2   // GP2  SCK
+#define PIN_MOSI       3   // GP3  MOSI
+#define PIN_MISO       4   // GP4  MISO
+#define SENSOR_CSLEFT  11  // GP11 CS for LEFT
+#define SENSOR_CSRIGHT 5   // GP5  CS for RIGHT
 
-// Motor 2 hardware (I2C1 on pins 6=SDA, 7=SCL)
-MagneticSensorAS5600 sensor2;          // AS5600 on Wire1
-BLDCMotor motor2(7);
-BLDCDriver3PWM driver2(29, 28, 27, 26);
+#ifndef MT6835_BITORDER
+#define MT6835_BITORDER MSBFIRST
+#endif
+// MT6835 runs in SPI mode 3
+SPISettings mt6835SPI(1000000, MT6835_BITORDER, SPI_MODE3);
 
-// Commander interface
+// ---------- Encoders (MT6835 on SPI) ----------
+MagneticSensorMT6835 sensorLEFT(SENSOR_CSLEFT, mt6835SPI);
+MagneticSensorMT6835 sensorRIGHT(SENSOR_CSRIGHT, mt6835SPI);
+
+// ---------- Motors and drivers ----------
+BLDCMotor motorLEFT  = BLDCMotor(7);                         // pole pairs
+BLDCMotor motorRIGHT = BLDCMotor(7);
+
+BLDCDriver3PWM driverRIGHT = BLDCDriver3PWM(18, 19, 20, 21); // A,B,C,EN
+BLDCDriver3PWM driverLEFT  = BLDCDriver3PWM(12, 10, 8, 9);   // A,B,C,EN
+
+// ---------- Commander ----------
 Commander command = Commander(Serial);
-void doMotor1(char* cmd) { command.motor(&motor1, cmd); }
-void doMotor2(char* cmd) { command.motor(&motor2, cmd); }
+void doLeft(char* cmd)  { command.motor(&motorLEFT,  cmd); }
+void doRight(char* cmd) { command.motor(&motorRIGHT, cmd); }
 
 void setup() {
   Serial.begin(115200);
   delay(300);
 
-  // I2C0 for sensor1
-  Wire.setSDA(8);
-  Wire.setSCL(9);
-  Wire.begin();
-  Wire.setClock(400000);
+  // SPI0 routing
+  SPI.setSCK(PIN_SCK);
+  SPI.setTX(PIN_MOSI);
+  SPI.setRX(PIN_MISO);
+  SPI.begin();
 
-  // I2C1 for sensor2
-  Wire1.setSDA(6);
-  Wire1.setSCL(7);
-  Wire1.begin();
-  Wire1.setClock(400000);
+  // Sensors on SPI0
+  sensorLEFT.init(&SPI);
+  sensorRIGHT.init(&SPI);
 
-  // AS5600 init
-  // closeTransactions=false keeps the bus claimed between reads for higher rate
-  sensor1.closeTransactions = false;
-  sensor2.closeTransactions = false;
-  sensor1.init(&Wire);
-  sensor2.init(&Wire1);
+  // Link sensors
+  motorLEFT.linkSensor(&sensorLEFT);
+  motorRIGHT.linkSensor(&sensorRIGHT);
 
-  // Motor 1
-  motor1.linkSensor(&sensor1);
-  driver1.voltage_power_supply = 12;
-  driver1.init();
-  motor1.linkDriver(&driver1);
-  motor1.controller = MotionControlType::velocity;
+  // Drivers
+  driverLEFT.voltage_power_supply = 12.0f;
+  driverLEFT.voltage_limit        = 8.0f;   // start safe
+  driverLEFT.init();
 
-  // known alignment
-  motor1.sensor_direction = Direction::CCW;
-  motor1.zero_electric_angle = 5.8721;
+  driverRIGHT.voltage_power_supply = 12.0f;
+  driverRIGHT.voltage_limit        = 8.0f;
+  driverRIGHT.init();
 
-  motor1.init();
-  motor1.initFOC();
-  motor1.useMonitoring(Serial);
-  motor1.target = 20.8;
+  // Link drivers
+  motorLEFT.linkDriver(&driverLEFT);
+  motorRIGHT.linkDriver(&driverRIGHT);
 
-  // Motor 2
-  motor2.linkSensor(&sensor2);
-  driver2.voltage_power_supply = 12;
-  driver2.init();
-  motor2.linkDriver(&driver2);
-  motor2.controller = MotionControlType::velocity;
+  // Control mode
+  motorLEFT.controller  = MotionControlType::velocity;
+  motorRIGHT.controller = MotionControlType::velocity;
 
-  // known alignment
-  motor2.sensor_direction = Direction::CCW;
-  motor2.zero_electric_angle = 0.5768;
+  // Velocity loop tuning starters
+  motorLEFT.PID_velocity.P = 1.5f;
+  motorLEFT.PID_velocity.I = 8.0f;
+  motorLEFT.PID_velocity.D = 0.0f;
+  motorLEFT.LPF_velocity.Tf = 0.01f;
+  motorLEFT.voltage_limit   = 12.0f;
 
-  motor2.init();
-  motor2.initFOC();
-  motor2.useMonitoring(Serial);
-  motor2.target = 20.8;
+  motorRIGHT.PID_velocity.P = 1.5f;
+  motorRIGHT.PID_velocity.I = 8.0f;
+  motorRIGHT.PID_velocity.D = 0.0f;
+  motorRIGHT.LPF_velocity.Tf = 0.01f;
+  motorRIGHT.voltage_limit   = 12.0f;
 
-  // Commander bindings
-  command.add('A', doMotor1, "Motor 1");
-  command.add('B', doMotor2, "Motor 2");
+  // If you already know alignment, set these here
+  // motorLEFT.sensor_direction  = Direction::CCW;
+  // motorLEFT.zero_electric_angle = <your value>;
+  // motorRIGHT.sensor_direction = Direction::CCW;
+  // motorRIGHT.zero_electric_angle = <your value>;
 
-  Serial.println("Commander ready. Use A or B in SimpleFOCStudio.");
+  // Init and FOC
+  motorLEFT.init();
+  motorRIGHT.init();
+  motorLEFT.initFOC();
+  motorRIGHT.initFOC();
+
+  // Defaults so Studio shows something
+  motorLEFT.target  = 20.0f;   // rad/s
+  motorRIGHT.target = 20.0f;
+
+  // Enable SimpleFOC Studio commander
+  command.add('A', doLeft,  "Motor LEFT");
+  command.add('B', doRight, "Motor RIGHT");
+
+  // Optional monitoring
+  motorLEFT.useMonitoring(Serial);
+  motorRIGHT.useMonitoring(Serial);
+
+  Serial.println("Commander ready. Use A and B in SimpleFOCStudio.");
 }
 
 void loop() {
   // FOC loops
-  motor1.loopFOC();
-  motor2.loopFOC();
+  motorLEFT.loopFOC();
+  motorRIGHT.loopFOC();
 
-  // Apply current targets (can be changed live from Studio)
-  motor1.move(motor1.target);
-  motor2.move(motor2.target);
+  // Apply current targets
+  motorLEFT.move(motorLEFT.target);
+  motorRIGHT.move(motorRIGHT.target);
 
   // Monitoring and commander
-  motor1.monitor();
-  motor2.monitor();
+  motorLEFT.monitor();
+  motorRIGHT.monitor();
   command.run();
 }
