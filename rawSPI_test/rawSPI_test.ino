@@ -5,7 +5,7 @@
 constexpr uint8_t PIN_SCK =  2;   // SCK
 constexpr uint8_t PIN_MOSI = 3;  // COPI (MCU -> MT6835 MOSI)
 constexpr uint8_t PIN_MISO = 4;  // CIPO (MT6835 MISO -> MCU)
-constexpr uint8_t PIN_CS   = 5;  // CS
+constexpr uint8_t PIN_CS   = 11;  // CS
 
 // MT6835 SPI basics from datasheet:
 // - Mode 3 (CPOL=1, CPHA=1)
