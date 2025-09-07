@@ -5,9 +5,9 @@
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
-#include <PID_v1.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+
 
 // -------- SPI for MT6835 --------
 #define PIN_SCK        2
@@ -40,74 +40,11 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29, &Wire1);
 #define SCREEN_HEIGHT  64
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1);
 
-// -------- Setpoint schedule --------
-// Each entry is {duration_ms, target_degrees}
-struct Segment { uint32_t ms; double deg; };
-
-Segment schedule[] = {
-  { 1071,  -2.000 },
-  { 1071, -5.000 },
-  { 1071, -7.000 },
-  { 1073, -10.471 },
-
-  { 1428,   0.000  },
-
-  { 1071,  +2.000 },
-  { 1071, +5.000 },
-  { 1071, +7.000 },
-  { 1073, +10.471 }
-};
-const size_t NUM_SEG = sizeof(schedule)/sizeof(schedule[0]);
-
-// Loop the schedule when it ends? (set false to stop)
-const bool LOOP_SCHEDULE = false;  
-
-// total schedule length
-uint32_t scheduleTotal = 0;
-
 // -------- Control vars --------
-bool scheduleDone = false;  
-// -------- Control vars --------
-double Setpoint = 0.0;   // target heading in deg
-double Input    = 0.0;
-double Output   = 0.0;
-double BaseVelo = 30.17;
+double BaseVelo = 20.0;
 
-double heading    = 0.0; // wrapped
+double heading = 0.0;    // wrapped
 double rawHeading = 0.0; // 0..360 from BNO
-
-// PID
-double Kp=0.01, Ki=0.00, Kd=0.0;
-PID myPID(&heading, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
-
-// time base
-uint32_t t_start = 0;
-
-// helpers
-static inline double wrap180(double d){
-  if (d > 180.0) d -= 360.0;
-  if (d < -180.0) d += 360.0;
-  return d;
-}
-
-// pick setpoint from schedule given elapsed ms
-double scheduledSetpoint(uint32_t elapsed_ms){
-  if (NUM_SEG == 0) return Setpoint;
-
-  if (!LOOP_SCHEDULE && elapsed_ms >= scheduleTotal) {
-    scheduleDone = true;  // mark as finished
-    return schedule[NUM_SEG-1].deg;  // hold final setpoint
-  }
-
-  uint32_t t = (LOOP_SCHEDULE) ? elapsed_ms % scheduleTotal : elapsed_ms;
-
-  uint32_t acc = 0;
-  for (size_t i = 0; i < NUM_SEG; i++) {
-    acc += schedule[i].ms;
-    if (t < acc) return schedule[i].deg;
-  }
-  return schedule[NUM_SEG-1].deg;
-}
 
 void setup() {
   Serial.begin(115200);
@@ -123,7 +60,7 @@ void setup() {
   Wire1.setSCL(BNO_SCL);
   Wire1.begin();
 
-  // OLED
+  // OLED first so we can message errors on Serial if needed
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("SSD1306 init failed");
     while (1) {}
@@ -134,22 +71,25 @@ void setup() {
   display.setCursor(0, 0);
   display.println("OLED OK");
   display.display();
-  for (size_t i = 0; i < NUM_SEG; i++) {
-    scheduleTotal += schedule[i].ms;
-  }
+
   // BNO055
   if (!bno.begin()) {
     Serial.println("BNO055 not detected");
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.println("BNO055 not found");
+    display.display();
     while (1) {}
   }
   bno.setExtCrystalUse(true);
 
-  // Encoders and motors
+  // Encoders
   sensorLEFT.init(&SPI);
   sensorRIGHT.init(&SPI);
   motorLEFT.linkSensor(&sensorLEFT);
   motorRIGHT.linkSensor(&sensorRIGHT);
 
+  // Drivers
   driverLEFT.voltage_power_supply = 12.0f;
   driverLEFT.voltage_limit        = 12.0f;
   driverLEFT.init();
@@ -158,48 +98,53 @@ void setup() {
   driverRIGHT.voltage_limit        = 12.0f;
   driverRIGHT.init();
 
+  // Link drivers
   motorLEFT.linkDriver(&driverLEFT);
   motorRIGHT.linkDriver(&driverRIGHT);
 
+  // Modulation
   motorLEFT.foc_modulation  = FOCModulationType::SpaceVectorPWM;
   motorRIGHT.foc_modulation = FOCModulationType::SpaceVectorPWM;
 
+  // Velocity control
   motorLEFT.controller  = MotionControlType::velocity;
   motorRIGHT.controller = MotionControlType::velocity;
 
-  motorLEFT.PID_velocity.P = 0.5f;
+  // Velocity loop tuning
+  motorLEFT.PID_velocity.P = .1f;
   motorLEFT.PID_velocity.I = 8.0f;
-  //motorLEFT.LPF_velocity.Tf = 0.01f;
+  motorLEFT.LPF_velocity.Tf = 0.01f;
 
-  motorRIGHT.PID_velocity.P = 0.5f;
+  motorRIGHT.PID_velocity.P = .1f;
   motorRIGHT.PID_velocity.I = 8.0f;
-  //motorRIGHT.LPF_velocity.Tf = 0.01f;
+  motorRIGHT.LPF_velocity.Tf = 0.01f;
 
   motorLEFT.voltage_limit = 12.0f;
   motorRIGHT.voltage_limit = 12.0f;
 
-  motorLEFT.PID_velocity.output_ramp  = 1000;
-  motorRIGHT.PID_velocity.output_ramp = 1000;
-
+  motorLEFT.PID_velocity.output_ramp  = 1000;   // rad/s^2
+motorRIGHT.PID_velocity.output_ramp = 1000;
+  
+  //motorLEFT.sensor_direction=Direction::CW; // or Direction::CCW
+  //motorLEFT.zero_electric_angle=2.0900; 
+  //motorRIGHT.sensor_direction=Direction::CW; // or Direction::CCW
+  //motorRIGHT.zero_electric_angle=4.0532;  
+   
+  // Init FOC
   motorRIGHT.init();
   motorRIGHT.initFOC();
   motorLEFT.init();
   motorLEFT.initFOC();
 
-  // initial heading and PID
+  // Initial heading and PID
   sensors_event_t event;
   bno.getEvent(&event);
   rawHeading = event.orientation.x;
-  heading = wrap180(rawHeading);
+  heading = (rawHeading > 180.0f) ? rawHeading - 360.0f : rawHeading;
 
-  Setpoint = scheduledSetpoint(0);
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(-0.1, +0.1); // rad/s diff
-  myPID.SetSampleTime(10);
-  myPID.SetControllerDirection(DIRECT);
+  double Setpoint = 0.0; // hold 0 deg heading
 
-  t_start = millis();
-
+  // Warm screen
   display.clearDisplay();
   display.setCursor(0, 0);
   display.println("Setup complete");
@@ -209,49 +154,64 @@ void setup() {
 }
 
 void loop() {
-  // time
-  uint32_t elapsed = millis() - t_start;
-
-  // check schedule state
-  Setpoint = scheduledSetpoint(elapsed);
-
   // Read BNO055
   sensors_event_t event;
   bno.getEvent(&event);
   rawHeading = event.orientation.x;
-  heading = wrap180(rawHeading);
+  heading = (rawHeading > 180.0f) ? rawHeading - 360.0f : rawHeading;
 
-  if (!scheduleDone) {
-    // PID
-    Input = heading;
-    myPID.Compute();
+  // Motors
+  motorRIGHT.loopFOC();
+  motorRIGHT.move((-BaseVelo) - heading/9);
+  motorLEFT.loopFOC();
+  motorLEFT.move(BaseVelo - heading/9);
 
-    // Motors
-    motorRIGHT.loopFOC();
-    motorRIGHT.move((-BaseVelo) + Output);
-    motorLEFT.loopFOC();
-    motorLEFT.move(BaseVelo + Output);
-  } else {
-    // stop motors if schedule is complete
-    motorRIGHT.loopFOC();
-    motorRIGHT.move(0);
-    motorLEFT.loopFOC();
-    motorLEFT.move(0);
-  }
-
-  // Telemetry every 100 ms
+  // Compute values for display
+  float vL = motorLEFT.shaftVelocity();
+  float vR = motorRIGHT.shaftVelocity();
+//  float tgt = Setpoint; // degrees
+/*
+  // Serial debug every 100 ms
   static uint32_t lastPrint = 0;
   if (millis() - lastPrint > 100) {
     lastPrint = millis();
-    Serial.print("t=");
-    Serial.print(elapsed/1000.0, 1);
-    Serial.print(" s | Hd=");
-    Serial.print(heading, 1);
-    Serial.print(" | Set=");
-    Serial.print(Setpoint, 1);
-    Serial.print(" | Out=");
-    Serial.print(Output, 2);
-    Serial.print(" | Done=");
-    Serial.println(scheduleDone ? "YES" : "NO");
+    Serial.print("Raw: ");
+    Serial.print(rawHeading, 2);
+    Serial.print(" deg | Wrap: ");
+    Serial.print(heading, 2);
+    Serial.print(" deg | Set: ");
+    Serial.print(tgt, 1);
+    Serial.print(" deg | vL: ");
+    Serial.print(vL, 2);
+    Serial.print(" | vR: ");
+    Serial.print(vR, 2);
+    Serial.print(" | Out: ");
+    Serial.println(Output, 2);
+
+    // OLED update
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("Hd act: ");
+    display.print(heading, 1);
+    display.println(" deg");
+
+    display.print("Hd tgt: ");
+    display.print(tgt, 1);
+    display.println(" deg");
+
+    display.print("vL: ");
+    display.print(vL, 1);
+    display.println(" rad/s");
+
+    display.print("vR: ");
+    display.print(vR, 1);
+    display.println(" rad/s");
+
+    display.print("PID: ");
+    display.print(Output, 1);
+    display.display();
+    
   }
+  */
 }
