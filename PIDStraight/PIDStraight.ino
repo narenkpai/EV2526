@@ -5,7 +5,6 @@
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
-#include <PID_v1.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -42,17 +41,12 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29, &Wire1);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1);
 
 // -------- Control vars --------
-double Setpoint, Input, Output;
-double BaseVelo = 20.0;
+double BaseVelo = 20.0;     // commanded base speed [rad/s]
+double BaseVeloCur = 0.0;       // slewed base speed used for commands// accel limit [rad/s^2], auto-set by setBaseVeloTarget
+uint32_t t_prev    = 0;  
 
 double heading = 0.0;    // wrapped
 double rawHeading = 0.0; // 0..360 from BNO
-
-// PID good for low speed
-//double Kp=0.065, Ki=0.01, Kd=0.0;
-
-double Kp=0.085, Ki=0.03, Kd=0.0;
-PID myPID(&heading, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
 void setup() {
   Serial.begin(115200);
@@ -150,11 +144,7 @@ motorRIGHT.PID_velocity.output_ramp = 1000;
   rawHeading = event.orientation.x;
   heading = (rawHeading > 180.0f) ? rawHeading - 360.0f : rawHeading;
 
-  Setpoint = 0.0; // hold 0 deg heading
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(-2.0, +2.0); // rad/s diff
-  myPID.SetSampleTime(10);
-  myPID.SetControllerDirection(DIRECT);
+  double Setpoint = 0.0; // hold 0 deg heading
 
   // Warm screen
   display.clearDisplay();
@@ -163,6 +153,7 @@ motorRIGHT.PID_velocity.output_ramp = 1000;
   display.display();
 
   Serial.println("Setup complete.");
+  t_prev = millis();
 }
 
 void loop() {
@@ -171,22 +162,19 @@ void loop() {
   bno.getEvent(&event);
   rawHeading = event.orientation.x;
   heading = (rawHeading > 180.0f) ? rawHeading - 360.0f : rawHeading;
-
-  // PID
-  Input = heading;
-  myPID.Compute();
+  heading = constrain(heading, -2, +2);
 
   // Motors
   motorRIGHT.loopFOC();
-  motorRIGHT.move((-BaseVelo) + Output);
+  motorRIGHT.move((-BaseVelo) - heading/9);
   motorLEFT.loopFOC();
-  motorLEFT.move(BaseVelo + Output);
+  motorLEFT.move(BaseVelo - heading/9);
 
   // Compute values for display
   float vL = motorLEFT.shaftVelocity();
   float vR = motorRIGHT.shaftVelocity();
-  float tgt = Setpoint; // degrees
-
+//  float tgt = Setpoint; // degrees
+/*
   // Serial debug every 100 ms
   static uint32_t lastPrint = 0;
   if (millis() - lastPrint > 100) {
@@ -227,5 +215,7 @@ void loop() {
     display.print("PID: ");
     display.print(Output, 1);
     display.display();
+    
   }
+  */
 }

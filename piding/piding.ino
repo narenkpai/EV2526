@@ -8,8 +8,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-
-// -------- SPI for MT6835 --------
+// SPI for MT6835
 #define PIN_SCK        2
 #define PIN_MOSI       3
 #define PIN_MISO       4
@@ -29,22 +28,41 @@ BLDCMotor motorRIGHT = BLDCMotor(7);
 BLDCDriver3PWM driverRIGHT = BLDCDriver3PWM(18, 19, 21, 22);
 BLDCDriver3PWM driverLEFT  = BLDCDriver3PWM(15, 14, 8, 9);
 
-// -------- BNO055 on I2C1 --------
+// BNO055 on I2C1
 #define BNO_SDA 6
 #define BNO_SCL 7
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29, &Wire1);
 
-// -------- OLED on I2C1 --------
+// OLED on I2C1
 #define OLED_ADDR      0x3C
 #define SCREEN_WIDTH   128
 #define SCREEN_HEIGHT  64
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1);
 
-// -------- Control vars --------
-double BaseVelo = 20.0;
+// Base velocity ramping
+double BaseVeloCmd = 20.0;    // commanded base speed in rad/s
+double BaseVeloCur = 0.0;     // slewed base speed used for commands
+double baseAccel   = 40.0;    // accel limit in rad/s^2, set by setBaseVeloTarget
+uint32_t t_prev    = 0;       // for dt
 
-double heading = 0.0;    // wrapped
-double rawHeading = 0.0; // 0..360 from BNO
+void setBaseVeloTarget(double target_rad_s, double ramp_time_s) {
+  BaseVeloCmd = target_rad_s;
+  ramp_time_s = max(0.01, ramp_time_s);
+  baseAccel = fabs(BaseVeloCmd - BaseVeloCur) / ramp_time_s;
+  if (baseAccel < 5.0) baseAccel = 5.0;
+}
+
+static inline void updateBaseVelo(double dt) {
+  double diff = BaseVeloCmd - BaseVeloCur;
+  double step = baseAccel * dt;
+  if      (diff >  step) BaseVeloCur += step;
+  else if (diff < -step) BaseVeloCur -= step;
+  else                   BaseVeloCur  = BaseVeloCmd;
+}
+
+// Control vars
+double heading = 0.0;
+double rawHeading = 0.0;
 
 void setup() {
   Serial.begin(115200);
@@ -60,7 +78,7 @@ void setup() {
   Wire1.setSCL(BNO_SCL);
   Wire1.begin();
 
-  // OLED first so we can message errors on Serial if needed
+  // OLED
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("SSD1306 init failed");
     while (1) {}
@@ -111,11 +129,11 @@ void setup() {
   motorRIGHT.controller = MotionControlType::velocity;
 
   // Velocity loop tuning
-  motorLEFT.PID_velocity.P = .1f;
+  motorLEFT.PID_velocity.P = 0.1f;
   motorLEFT.PID_velocity.I = 8.0f;
   motorLEFT.LPF_velocity.Tf = 0.01f;
 
-  motorRIGHT.PID_velocity.P = .1f;
+  motorRIGHT.PID_velocity.P = 0.1f;
   motorRIGHT.PID_velocity.I = 8.0f;
   motorRIGHT.LPF_velocity.Tf = 0.01f;
 
@@ -123,95 +141,74 @@ void setup() {
   motorRIGHT.voltage_limit = 12.0f;
 
   motorLEFT.PID_velocity.output_ramp  = 1000;   // rad/s^2
-motorRIGHT.PID_velocity.output_ramp = 1000;
-  
-  //motorLEFT.sensor_direction=Direction::CW; // or Direction::CCW
-  //motorLEFT.zero_electric_angle=2.0900; 
-  //motorRIGHT.sensor_direction=Direction::CW; // or Direction::CCW
-  //motorRIGHT.zero_electric_angle=4.0532;  
-   
+  motorRIGHT.PID_velocity.output_ramp = 1000;
+
   // Init FOC
   motorRIGHT.init();
   motorRIGHT.initFOC();
   motorLEFT.init();
   motorLEFT.initFOC();
 
-  // Initial heading and PID
+  // Prime heading
   sensors_event_t event;
   bno.getEvent(&event);
   rawHeading = event.orientation.x;
   heading = (rawHeading > 180.0f) ? rawHeading - 360.0f : rawHeading;
 
-  double Setpoint = 0.0; // hold 0 deg heading
+  // Start smooth ramp to 20 rad/s in 2 s
+  BaseVeloCur = 0.0;
+  setBaseVeloTarget(20.0, 2.0);
 
-  // Warm screen
+  t_prev = millis();
+
   display.clearDisplay();
   display.setCursor(0, 0);
   display.println("Setup complete");
   display.display();
-
   Serial.println("Setup complete.");
 }
 
 void loop() {
+  // dt for slew
+  uint32_t now = millis();
+  double dt = (now - t_prev) * 0.001;
+  if (dt < 0.001) dt = 0.001;
+  if (dt > 0.05)  dt = 0.05;
+  t_prev = now;
+
   // Read BNO055
   sensors_event_t event;
   bno.getEvent(&event);
   rawHeading = event.orientation.x;
   heading = (rawHeading > 180.0f) ? rawHeading - 360.0f : rawHeading;
+  heading = constrain(heading, -2.0, +2.0);
 
-  // Motors
+  // Update base velocity with slew
+  updateBaseVelo(dt);
+
+  // FOC and commands
   motorRIGHT.loopFOC();
-  motorRIGHT.move((-BaseVelo) - heading/9);
   motorLEFT.loopFOC();
-  motorLEFT.move(BaseVelo - heading/9);
 
-  // Compute values for display
-  float vL = motorLEFT.shaftVelocity();
-  float vR = motorRIGHT.shaftVelocity();
-//  float tgt = Setpoint; // degrees
-/*
-  // Serial debug every 100 ms
+  motorRIGHT.move((-BaseVeloCur) - heading / 9.0);
+  motorLEFT.move(( BaseVeloCur) - heading / 9.0);
+
+  // Example: change speed later without a jump
+  // if (millis() > 8000) setBaseVeloTarget(10.0, 1.5);
+
+  // Minimal debug
+  /*
   static uint32_t lastPrint = 0;
-  if (millis() - lastPrint > 100) {
+  if (millis() - lastPrint > 200) {
     lastPrint = millis();
-    Serial.print("Raw: ");
-    Serial.print(rawHeading, 2);
-    Serial.print(" deg | Wrap: ");
+    Serial.print("BaseCur=");
+    Serial.print(BaseVeloCur, 2);
+    Serial.print(" hd=");
     Serial.print(heading, 2);
-    Serial.print(" deg | Set: ");
-    Serial.print(tgt, 1);
-    Serial.print(" deg | vL: ");
-    Serial.print(vL, 2);
-    Serial.print(" | vR: ");
-    Serial.print(vR, 2);
-    Serial.print(" | Out: ");
-    Serial.println(Output, 2);
-
-    // OLED update
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.print("Hd act: ");
-    display.print(heading, 1);
-    display.println(" deg");
-
-    display.print("Hd tgt: ");
-    display.print(tgt, 1);
-    display.println(" deg");
-
-    display.print("vL: ");
-    display.print(vL, 1);
-    display.println(" rad/s");
-
-    display.print("vR: ");
-    display.print(vR, 1);
-    display.println(" rad/s");
-
-    display.print("PID: ");
-    display.print(Output, 1);
-    display.display();
-    
+    Serial.print(" vL=");
+    Serial.print(motorLEFT.shaftVelocity(), 2);
+    Serial.print(" vR=");
+    Serial.println(motorRIGHT.shaftVelocity(), 2);
   }
   */
 }
