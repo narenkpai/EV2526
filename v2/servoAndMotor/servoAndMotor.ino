@@ -51,7 +51,7 @@ void imuServoTask(void* pv) {
 
     // Write servo. 90 is straight. Negative is left, positive is right.
     // Clamp to sane range for write
-    float servoCmd = 90.0f - fh;
+    float servoCmd = 85.0f - fh;
     if (servoCmd < 0) servoCmd = 0;
     if (servoCmd > 180) servoCmd = 180;
     servo1.write((int)servoCmd);
