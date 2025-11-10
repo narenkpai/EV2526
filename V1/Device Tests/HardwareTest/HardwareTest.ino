@@ -58,12 +58,12 @@ void setup() {
   // Driver setup
  // driverLEFT.enable_active_high = true;   // EN tied high is fine
   driverLEFT.voltage_power_supply = 12.0f;
-  driverLEFT.voltage_limit        = 6.0f; // keep modest to start
+  driverLEFT.voltage_limit        = 12.0f; // keep modest to start
   driverLEFT.init();
 
  // driverRIGHT.enable_active_high = true;   // EN tied high is fine
   driverRIGHT.voltage_power_supply = 12.0f;
-  driverRIGHT.voltage_limit        = 6.0f; // keep modest to start
+  driverRIGHT.voltage_limit        = 12.0f; // keep modest to start
   driverRIGHT.init();
 
   // Motor setup
@@ -73,19 +73,20 @@ void setup() {
   motorRIGHT.foc_modulation = FOCModulationType::SpaceVectorPWM; // or FOCModulationType::SpaceVectorPWM;
 
   // Velocity control with internal angle from sensor
-  motorLEFT.controller = MotionControlType::velocity;
-  motorRIGHT.controller = MotionControlType::velocity;
+  motorLEFT.controller = MotionControlType::torque;
+  motorRIGHT.controller = MotionControlType::torque;
 
   // Velocity loop tuning starters
-  motorLEFT.PID_velocity.P   = 0.0f;
-  motorLEFT.PID_velocity.I   = 1.0f;
+  motorLEFT.PID_velocity.P   = 0.14f;
+  motorLEFT.PID_velocity.I   = 0.95f;
   motorLEFT.PID_velocity.D   = 0.0f;
- // motorLEFT.LPF_velocity.Tf  = 0.02f;
+
+  motorLEFT.LPF_velocity.Tf  = 0.02f;
 
   motorLEFT.voltage_limit    = 12.0f; 
   
-  motorRIGHT.PID_velocity.P   = 0.0f;
-  motorRIGHT.PID_velocity.I   = 1.0f;
+  motorRIGHT.PID_velocity.P   = 0.14f;
+  motorRIGHT.PID_velocity.I   = 0.95f;
   motorRIGHT.PID_velocity.D   = 0.0f;
  // motorRIGHT.LPF_velocity.Tf  = 0.02f;
 
