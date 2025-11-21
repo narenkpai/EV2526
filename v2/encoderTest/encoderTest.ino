@@ -6,8 +6,8 @@
 #include <Wire.h>
 
 // ------------ I2C config ------------
-static const int SDA_PIN = 13;
-static const int SCL_PIN = 12;
+static const int SDA_PIN = 26;
+static const int SCL_PIN = 27;
 static const uint32_t I2C_HZ = 400000;   // Fast mode
 
 // ------------ MT6701 map ------------

@@ -5,7 +5,7 @@
 
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x29);  
 // Change 0x28 to 0x29 if your board uses the other address
-static const int servoPin = 14;
+static const int servoPin = 13;
 Servo servo1;
 bool started = false;
 float startHeading = 0;
